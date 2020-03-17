@@ -19,8 +19,10 @@ import shlex
 from argparse import ArgumentParser
 
 import numpy as np
+import magic
 from PIL import Image
 from scipy.cluster.vq import kmeans, vq
+from pdf2image import convert_from_path
 
 ######################################################################
 
@@ -314,23 +316,28 @@ def load(input_filename):
 returns the image DPI in x and y as a tuple.'''
 
     try:
-        pil_img = Image.open(input_filename)
-    except IOError:
+        if magic.from_file(input_filename, mime=True) == 'application/pdf':
+            pil_imgs = convert_from_path(input_filename)
+        else:
+            pil_imgs = Image.open(input_filename)
+    except (IOError, KeyError) as err:
+        print('Error: %s' % err)
         sys.stderr.write('warning: error opening {}\n'.format(
             input_filename))
         return None, None
 
-    if pil_img.mode != 'RGB':
-        pil_img = pil_img.convert('RGB')
+    if pil_imgs[0].mode != 'RGB':
+        for img in pil_imgs:
+            img = img.convert('RGB')
 
-    if 'dpi' in pil_img.info:
-        dpi = pil_img.info['dpi']
+    if 'dpi' in pil_imgs[0].info:
+        dpi = pil_imgs[0].info['dpi']
     else:
         dpi = (300, 300)
 
-    img = np.array(pil_img)
+    imgs = [np.array(pil_img) for pil_img in pil_imgs]
 
-    return img, dpi
+    return imgs, dpi
 
 ######################################################################
 
@@ -503,28 +510,42 @@ their samples together into one large array.
 def emit_pdf(outputs, options):
 
     '''Runs the PDF conversion command to generate the PDF.'''
+    img_list = []
+    first_im = None
+    i = 0
+    for output in outputs:
 
-    cmd = options.pdf_cmd
-    cmd = cmd.replace('%o', options.pdfname)
-    if len(outputs) > 2:
-        cmd_print = cmd.replace('%i', ' '.join(outputs[:2] + ['...']))
-    else:
-        cmd_print = cmd.replace('%i', ' '.join(outputs))
-    cmd = cmd.replace('%i', ' '.join(outputs))
+        image = Image.open(output)
 
-    if not options.quiet:
-        print('running PDF command "{}"...'.format(cmd_print))
+        if i == 0:
+            first_im = image.convert('RGB')
+            i += 1
+        else:
+            img_list.append(image.convert('RGB'))
+        
+    first_im.save(options.pdfname, save_all=True, append_images=img_list)
 
-    try:
-        result = subprocess.call(shlex.split(cmd))
-    except OSError:
-        result = -1
+    # cmd = options.pdf_cmd
+    # cmd = cmd.replace('%o', options.pdfname)
+    # if len(outputs) > 2:
+    #     cmd_print = cmd.replace('%i', ' '.join(outputs[:2] + ['...']))
+    # else:
+    #     cmd_print = cmd.replace('%i', ' '.join(outputs))
+    # cmd = cmd.replace('%i', ' '.join(outputs))
 
-    if result == 0:
-        if not options.quiet:
-            print('  wrote', options.pdfname)
-    else:
-        sys.stderr.write('warning: PDF command failed\n')
+    # if not options.quiet:
+    #     print('running PDF command "{}"...'.format(cmd_print))
+
+    # try:
+    #     result = subprocess.call(shlex.split(cmd))
+    # except OSError:
+    #     result = -1
+
+    # if result == 0:
+    #     if not options.quiet:
+    #         print('  wrote', options.pdfname)
+    # else:
+    #     sys.stderr.write('warning: PDF command failed\n')
 
 ######################################################################
 
@@ -545,32 +566,35 @@ def notescan_main(options):
 
     for input_filename in filenames:
 
-        img, dpi = load(input_filename)
-        if img is None:
+        imgs, dpi = load(input_filename)
+        if imgs is None:
             continue
 
-        output_filename = '{}{:04d}.png'.format(
-            options.basename, len(outputs))
+        i = 0
+        for img in imgs:
+            output_filename = '%s_%d.png' % (
+                options.basename, i)
+            i += 1
 
-        if not options.quiet:
-            print('opened', input_filename)
+            if not options.quiet:
+                print('opened', input_filename)
 
-        if not do_global:
-            samples = sample_pixels(img, options)
-            palette = get_palette(samples, options)
+            if not do_global:
+                samples = sample_pixels(img, options)
+                palette = get_palette(samples, options)
 
-        labels = apply_palette(img, palette, options)
+            labels = apply_palette(img, palette, options)
 
-        save(output_filename, labels, palette, dpi, options)
+            save(output_filename, labels, palette, dpi, options)
 
-        if do_postprocess:
-            post_filename = postprocess(output_filename, options)
-            if post_filename:
-                output_filename = post_filename
-            else:
-                do_postprocess = False
+            if do_postprocess:
+                post_filename = postprocess(output_filename, options)
+                if post_filename:
+                    output_filename = post_filename
+                else:
+                    do_postprocess = False
 
-        outputs.append(output_filename)
+            outputs.append(output_filename)
 
         if not options.quiet:
             print('  done\n')

@@ -1,4 +1,6 @@
 noteshrink
 numpy>=1.10
 scipy
-Image
+pillow
+python-magic-bin==0.4.14
+pdf2image
